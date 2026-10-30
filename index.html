@@ -111,6 +111,19 @@
   </main>
 
   <aside class="right">
+    <div class="auto-box">
+      <div class="row">
+        <button id="autoPage" class="primary grow">🤖 이 페이지 자동 추출</button>
+        <button id="autoAll" title="문서 전체 페이지">전체 페이지</button>
+      </div>
+      <p class="muted small">AI가 문제·그림·해설 위치를 찾아 보라색 상자로 제안합니다. 아래 학년·과목·출처가 모든 문제에 적용되고, 단원을 비워 두면 AI가 단원과 유형도 고릅니다.</p>
+      <div id="autoState" class="small"></div>
+      <div id="proposalBar" class="proposal-bar hidden">
+        <span id="proposalInfo" class="grow small"></span>
+        <button id="clearProposals" class="link small">지우기</button>
+        <button id="saveProposals" class="primary">모두 저장</button>
+      </div>
+    </div>
     <div class="modes">
       <button class="mode active" data-mode="problem" title="Q">🟦 문제</button>
       <button class="mode" data-mode="figure" title="E">🟧 그림</button>

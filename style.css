@@ -280,3 +280,17 @@ dialog#settingsDlg { width: min(520px, 95vw); }
   .edit-layout { grid-template-columns: 1fr; }
   .edit-left, .edit-right { max-height: none; }
 }
+
+/* AI 자동 추출 제안 */
+:root { --prop: #7c3aed; }
+.auto-box { border: 1px solid #ddd6fe; background: #faf5ff; border-radius: 8px; padding: 8px; margin-bottom: 10px; }
+.auto-box p { margin: 6px 0 0; }
+.auto-box #autoState:not(:empty) { margin-top: 6px; color: var(--prop); }
+.proposal-bar { display: flex; gap: 8px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ddd6fe; }
+.rect.proposal { border: 2px dashed var(--prop); background: rgba(124,58,237,.07); }
+.rect.proposal .lbl { background: var(--prop); display: flex; gap: 6px; align-items: center; }
+.rect.proposal.solution { border-color: var(--sol); background: rgba(22,163,74,.06); }
+.rect.proposal.solution .lbl { background: var(--sol); }
+.rect.proposal.unmatched { border-color: var(--danger); } .rect.proposal.unmatched .lbl { background: var(--danger); }
+.rect.proposal.figure { border: 1.5px dashed var(--fig); background: rgba(234,122,12,.06); pointer-events: none; }
+.rect .lbl .pe { border: none; background: rgba(255,255,255,.25); color: #fff; padding: 0 4px; font-size: 11px; line-height: 14px; border-radius: 3px; }

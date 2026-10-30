@@ -1,7 +1,7 @@
 import * as pdfjs from '../vendor/pdfjs/pdf.min.mjs';
 import { DriveStore, LocalStore, AuthError, ConflictError } from './store.js';
 import { GRADES, isHigh, DEFAULT_TAXONOMY, DEFAULT_SUBJECT, CHOICES } from './math.js';
-import { readProblem, readSolution, getApiKey, setApiKey, testKey, OcrError } from './ocr.js';
+import { readProblem, readSolution, detectPage, getApiKey, setApiKey, testKey, OcrError } from './ocr.js';
 import { GOOGLE_CLIENT_ID } from '../config.js';
 
 window.__pbStarted = true;
@@ -424,7 +424,8 @@ function openDoc(id) {
   PAGES = docPages(DOC); pageIdx = 0; regions = [];
   $$('#docList li').forEach(li => li.classList.toggle('active', li.dataset.id === id));
   setMode(DOC.kind === 'solution' ? 'solution' : 'problem');
-  renderPage();
+  $('#autoState').textContent = '';
+  renderPage(); renderProposalBar();
 }
 
 async function renderPage() {
@@ -468,6 +469,15 @@ function drawRects(temp) {
   const pct = v => (v * 100).toFixed(3) + '%';
   const box = r => `left:${pct(r.x)};top:${pct(r.y)};width:${pct(r.w)};height:${pct(r.h)}`;
   let html = savedRectsOnPage().map(r => `<div class="rect saved" style="${box(r)}"><span class="lbl">${esc(r.label)}</span></div>`).join('');
+  docProposals().forEach((p, i) => {
+    const name = `${p.kind === 'solution' ? '해설' : '문제'} ${p.number ? p.number + '번' : '(번호 없음)'}${p.unmatched ? ' · 짝 없음' : ''}`;
+    p.regions.forEach((r, k) => {
+      if (r.pg !== pageIdx) return;
+      html += `<div class="rect proposal ${p.kind} ${p.unmatched ? 'unmatched' : ''}" style="${box(r)}"><span class="lbl">${esc(name)}${k ? ' (이어짐)' : ''}
+        <button class="pe" data-p="${i}" title="이 제안을 직접 고치기">✎</button></span><button class="x px" data-p="${i}" title="제안 지우기">✕</button></div>`;
+    });
+    p.figs.filter(r => r.pg === pageIdx).forEach(r => { html += `<div class="rect proposal figure" style="${box(r)}"></div>`; });
+  });
   const n = { problem: 0, figure: 0, solution: 0 };
   regions.forEach((r, i) => {
     n[r.kind]++;
@@ -476,9 +486,17 @@ function drawRects(temp) {
   });
   if (temp) html += `<div class="rect ${mode}" style="${box(temp)}"></div>`;
   $('#overlay').innerHTML = html;
-  $$('#overlay .x').forEach(b => {
+  $$('#overlay .x:not(.px)').forEach(b => {
     b.onpointerdown = e => e.stopPropagation();
     b.onclick = e => { e.stopPropagation(); regions.splice(+b.dataset.i, 1); drawRects(); };
+  });
+  $$('#overlay .px').forEach(b => {
+    b.onpointerdown = e => e.stopPropagation();
+    b.onclick = e => { e.stopPropagation(); docProposals().splice(+b.dataset.p, 1); drawRects(); renderProposalBar(); };
+  });
+  $$('#overlay .pe').forEach(b => {
+    b.onpointerdown = e => e.stopPropagation();
+    b.onclick = e => { e.stopPropagation(); editProposal(+b.dataset.p); };
   });
   const c = k => regions.filter(r => r.kind === k).length;
   $('#regionSummary').textContent = regions.length ? `지정한 영역: 문제 ${c('problem')} · 그림 ${c('figure')} · 해설 ${c('solution')}` : '페이지 위를 드래그하세요';
@@ -534,6 +552,14 @@ function initViewer() {
 
   $$('.mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   $('#attachSearch').oninput = debounce(renderAttach, 200);
+  $('#autoPage').onclick = () => DOC ? autoExtract([pageIdx]) : toast('먼저 문서를 여세요');
+  $('#autoAll').onclick = () => {
+    if (!DOC) return toast('먼저 문서를 여세요');
+    if (PAGES.length > 5 && !confirm(`${PAGES.length}페이지를 모두 분석할까요? (페이지마다 Claude 사용 요금이 듭니다)`)) return;
+    autoExtract(PAGES.map((_, i) => i));
+  };
+  $('#saveProposals').onclick = saveProposals;
+  $('#clearProposals').onclick = () => { if (DOC) { proposals.delete(DOC.id); pendingAnswers.delete(DOC.id); drawRects(); renderProposalBar(); } };
 }
 
 function setMode(m) {
@@ -608,6 +634,218 @@ async function cropAndUpload(rs, label) {
   return store.putFile(blob, `${label}.${ext}`, 'img');
 }
 
+// 영역들을 잘라 올리고 문제 하나를 만듦 → 새 id
+async function createProblem(meta, probR, figR = [], solR = []) {
+  const auto = !!getApiKey();
+  const t = nowISO();
+  const id = bank.nextId;
+  bank.nextId = id + 1;  // 여러 개를 동시에 만들 때 번호가 겹치지 않도록 먼저 올림
+  const label = `${meta.source || '문제'} ${meta.number || ''} #${id}`.replace(/\s+/g, ' ');
+  const [image, solImage, ...figures] = await Promise.all([
+    cropAndUpload(probR, label),
+    solR.length ? cropAndUpload(solR, label + ' 해설') : null,
+    ...figR.map((r, k) => cropAndUpload([r], `${label} 그림${k + 1}`)),
+  ]);
+  bank.problems.push({
+    id, ...meta, body: '', choices: [], solution: '', memo: '',
+    image, figures, figWFrac: figR.map(r => r.w), solImage,
+    docId: DOC.id, regions: probR, figRegions: figR, wFrac: widthFrac(probR),
+    solDocId: solR.length ? DOC.id : null, solRegions: solR, solWFrac: widthFrac(solR),
+    ocr: auto ? 'wait' : '', solOcr: auto && solR.length ? 'wait' : '', reviewed: false,
+    createdAt: t, updatedAt: t,
+  });
+  if (auto) { enqueue(id, 'problem'); if (solR.length) enqueue(id, 'solution'); }
+  return id;
+}
+
+async function attachSolution(target, solR) {
+  const auto = !!getApiKey();
+  const solImage = await cropAndUpload(solR, `${target.source || '문제'} ${target.number || ''} #${target.id} 해설`);
+  store.deleteFile(target.solImage);
+  Object.assign(target, { solImage, solDocId: DOC.id, solRegions: solR, solWFrac: widthFrac(solR), solOcr: auto ? 'wait' : '', solution: '', updatedAt: nowISO() });
+  if (auto) enqueue(target.id, 'solution');
+}
+
+// ================================================================ ① 입력: AI 자동 추출
+// 문서별 제안 목록: { kind, number, regions:[{pg,x,y,w,h}], figs:[...], unmatched? }
+const proposals = new Map();
+const docProposals = () => (DOC ? proposals.get(DOC.id) || [] : []);
+let extracting = false;
+
+// 페이지 그림을 Claude 에 보낼 크기(긴 변 1600px)로
+async function pageBlobForAI(pg) {
+  const c = await pageCanvas(pg);
+  const k = Math.min(1, 1600 / Math.max(c.width, c.height));
+  const o = new OffscreenCanvas(Math.round(c.width * k), Math.round(c.height * k));
+  o.getContext('2d').drawImage(c, 0, 0, o.width, o.height);
+  return o.convertToBlob({ type: 'image/webp', quality: 0.9 });
+}
+
+// AI 가 준 상자(0~1000)를 조금 넓힌 뒤 글자가 있는 곳까지 다시 좁힘
+function tightRect(canvas, b, pg, pad = 0.008) {
+  let x0 = Math.max(0, Math.min(b.x0, b.x1) / 1000 - pad), y0 = Math.max(0, Math.min(b.y0, b.y1) / 1000 - pad);
+  let x1 = Math.min(1, Math.max(b.x0, b.x1) / 1000 + pad), y1 = Math.min(1, Math.max(b.y0, b.y1) / 1000 + pad);
+  const W = canvas.width, H = canvas.height;
+  const px = [Math.floor(x0 * W), Math.floor(y0 * H), Math.ceil(x1 * W), Math.ceil(y1 * H)];
+  const w = px[2] - px[0], h = px[3] - px[1];
+  if (w > 4 && h > 4) {
+    const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(px[0], px[1], w, h).data;
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) {
+        const i = (y * w + x) * 4;
+        if (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11 < 170) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX > minX && maxY > minY) {
+      const m = Math.round(W * 0.004);
+      x0 = Math.max(0, px[0] + minX - m) / W; x1 = Math.min(W, px[0] + maxX + m) / W;
+      y0 = Math.max(0, px[1] + minY - m) / H; y1 = Math.min(H, px[1] + maxY + m) / H;
+    }
+  }
+  const r4 = v => +v.toFixed(4);
+  return { pg, x: r4(x0), y: r4(y0), w: r4(x1 - x0), h: r4(y1 - y0) };
+}
+
+async function autoExtract(pageIdxs) {
+  if (extracting) return;
+  if (!getApiKey()) return openSettings();
+  if (!DOC) return toast('먼저 문서를 여세요');
+  const doc = DOC;
+  extracting = true;
+  $$('#autoPage, #autoAll').forEach(b => (b.disabled = true));
+  const state = $('#autoState');
+  const results = new Array(pageIdxs.length);
+  let done = 0, failed = 0;
+  state.textContent = `🤖 페이지 분석 중… 0 / ${pageIdxs.length}`;
+  // 두 페이지씩 동시에
+  let next = 0;
+  const worker = async () => {
+    while (next < pageIdxs.length) {
+      const k = next++;
+      const pg = pageIdxs[k];
+      try { results[k] = await detectPage(await pageBlobForAI(PAGES[pg]), doc.kind); }
+      catch (e) {
+        failed++;
+        if (e instanceof OcrError && ['nokey', 'auth'].includes(e.code)) { next = pageIdxs.length; toast(e.message, 6000); }
+        else console.warn('페이지', pg + 1, e);
+      }
+      state.textContent = `🤖 페이지 분석 중… ${++done} / ${pageIdxs.length}`;
+    }
+  };
+  await Promise.all([worker(), worker()]);
+
+  // 페이지 순서대로 합치기 (앞 단·앞 페이지에서 이어지는 조각은 앞 문제에 붙임)
+  const list = proposals.get(doc.id)?.filter(p => !pageIdxs.includes(p.regions[0].pg)) || [];
+  const answers = [];
+  let last = null;
+  for (const [k, res] of results.entries()) {
+    if (!res) { last = null; continue; }
+    const pg = pageIdxs[k];
+    const canvas = await pageCanvas(PAGES[pg]);
+    for (const it of res.items) {
+      const r = tightRect(canvas, it.box, pg);
+      if (r.w < 0.02 || r.h < 0.01) continue;
+      const figs = it.kind === 'problem' ? it.figures.map(f => tightRect(canvas, f, pg, 0.004)).filter(f => f.w > 0.02 && f.h > 0.01) : [];
+      const num = String(it.number || '').replace(/[^\d]/g, '');
+      if (it.continued && !num && last && last.kind === it.kind) {
+        last.regions.push(r); last.figs.push(...figs);
+      } else {
+        last = { kind: it.kind, number: num, regions: [r], figs };
+        list.push(last);
+      }
+    }
+    answers.push(...res.answer_table.map(a => ({ number: String(a.number).replace(/[^\d]/g, ''), answer: a.answer.trim() })).filter(a => a.number && a.answer));
+  }
+  proposals.set(doc.id, list);
+  if (answers.length) {
+    const cur = pendingAnswers.get(doc.id) || [];
+    pendingAnswers.set(doc.id, [...cur.filter(a => !answers.some(b => b.number === a.number)), ...answers]);
+  }
+  extracting = false;
+  $$('#autoPage, #autoAll').forEach(b => (b.disabled = false));
+  const np = list.filter(p => p.kind === 'problem').length, ns = list.filter(p => p.kind === 'solution').length;
+  state.textContent = failed ? `⚠ ${failed}개 페이지는 분석하지 못했습니다` : '';
+  toast(`찾은 것: 문제 ${np} · 해설 ${ns}${answers.length ? ` · 빠른 정답 ${answers.length}` : ''}. 확인 후 '모두 저장'을 누르세요`, 5000);
+  if (DOC === doc) { drawRects(); renderProposalBar(); }
+}
+const pendingAnswers = new Map(); // 문서별 '빠른 정답' 표
+
+function renderProposalBar() {
+  const list = docProposals();
+  const ans = DOC ? pendingAnswers.get(DOC.id) || [] : [];
+  const np = list.filter(p => p.kind === 'problem').length, ns = list.filter(p => p.kind === 'solution').length;
+  $('#proposalBar').classList.toggle('hidden', !list.length && !ans.length);
+  $('#proposalInfo').textContent = [np && `문제 ${np}`, ns && `해설 ${ns}`, ans.length && `빠른 정답 ${ans.length}`].filter(Boolean).join(' · ') + ' 제안';
+}
+
+// 해설·정답을 붙일 문제 찾기: 같은 문서 → 같은 출처 순서로, 같은 번호
+function findByNumber(number, source) {
+  const cand = bank.problems.filter(p => p.number === number && (p.docId === DOC.id || (source && p.source === source)));
+  cand.sort((a, b) => (b.docId === DOC.id) - (a.docId === DOC.id) || b.id - a.id);
+  return cand[0];
+}
+
+async function saveProposals() {
+  if (busy) return;
+  const list = docProposals();
+  const ans = pendingAnswers.get(DOC.id) || [];
+  if (!list.length && !ans.length) return;
+  const meta = readMeta($('#metaForm'));
+  if (list.some(p => p.kind === 'problem') && !meta.grade) return toast('학년을 먼저 고르세요 (모든 문제에 적용됩니다)');
+  busy = true; $('#saveProposals').disabled = true;
+  const strip = r => ({ pg: r.pg, x: r.x, y: r.y, w: r.w, h: r.h });
+  let made = 0, attached = 0, answered = 0, i = 0;
+  const left = [];
+  try {
+    // 문제 먼저 (해설이 같은 문서에 있을 때 번호로 이어 붙일 수 있도록)
+    for (const p of list.filter(x => x.kind === 'problem')) {
+      setSave(`저장 중… ${++i} / ${list.length}`);
+      await createProblem({ ...meta, number: p.number || '', answer: '' }, p.regions.map(strip), p.figs.map(strip));
+      made++;
+    }
+    for (const p of list.filter(x => x.kind === 'solution')) {
+      setSave(`저장 중… ${++i} / ${list.length}`);
+      const target = p.number && findByNumber(p.number, meta.source);
+      if (!target) { left.push({ ...p, unmatched: true }); continue; }
+      await attachSolution(target, p.regions.map(strip));
+      attached++;
+    }
+    for (const a of ans) {
+      const target = findByNumber(a.number, meta.source);
+      if (target) { target.answer = a.answer; answered++; }
+    }
+  } catch (e) {
+    e instanceof AuthError ? handleError(e) : toast('저장 실패: ' + e.message, 5000);
+  }
+  proposals.set(DOC.id, left);
+  pendingAnswers.delete(DOC.id);
+  commit();
+  busy = false; $('#saveProposals').disabled = false;
+  drawRects(); renderProposalBar(); renderDocs(); renderRecent();
+  toast([made && `문제 ${made}개 저장`, attached && `해설 ${attached}개 연결`, answered && `정답 ${answered}개 입력`,
+    left.length && `번호가 맞는 문제를 못 찾은 해설 ${left.length}개 (출처를 확인하세요)`].filter(Boolean).join(' · ') || '저장할 것이 없습니다', 6000);
+}
+
+// 제안 하나를 직접 고칠 수 있게 일반 영역으로 옮김
+function editProposal(idx) {
+  const list = docProposals();
+  const p = list[idx];
+  if (!p) return;
+  list.splice(idx, 1);
+  regions = [
+    ...p.regions.map(r => ({ ...r, kind: p.kind === 'solution' ? 'solution' : 'problem' })),
+    ...p.figs.map(r => ({ ...r, kind: 'figure' })),
+  ];
+  if (p.number) $('#metaForm').elements.number.value = p.number;
+  if (p.kind === 'solution') { attachTarget = findByNumber(p.number, readMeta($('#metaForm')).source)?.id ?? null; setMode('solution'); }
+  drawRects(); renderProposalBar();
+  toast('영역을 고친 뒤 저장(Ctrl+Enter)하세요');
+}
+
 let busy = false;
 async function saveProblem() {
   if (busy) return;
@@ -629,32 +867,12 @@ async function saveProblem() {
   busy = true; $('#saveBtn').disabled = true; setSave('이미지 올리는 중…');
   const auto = !!getApiKey();
   try {
-    const t = nowISO();
     if (probR.length) {
-      const id = bank.nextId;
-      const label = `${meta.source || '문제'} ${meta.number || ''} #${id}`.replace(/\s+/g, ' ');
-      const [image, solImage, ...figures] = await Promise.all([
-        cropAndUpload(probR, label),
-        solR.length ? cropAndUpload(solR, label + ' 해설') : null,
-        ...figR.map((r, k) => cropAndUpload([r], `${label} 그림${k + 1}`)),
-      ]);
-      bank.nextId = Math.max(bank.nextId, id + 1);
-      bank.problems.push({
-        id, ...meta, body: '', choices: [], solution: '', memo: '',
-        image, figures, figWFrac: figR.map(r => r.w), solImage,
-        docId: DOC.id, regions: probR, figRegions: figR, wFrac: widthFrac(probR),
-        solDocId: solR.length ? DOC.id : null, solRegions: solR, solWFrac: widthFrac(solR),
-        ocr: auto ? 'wait' : '', solOcr: auto && solR.length ? 'wait' : '', reviewed: false,
-        createdAt: t, updatedAt: t,
-      });
-      if (auto) { enqueue(id, 'problem'); if (solR.length) enqueue(id, 'solution'); }
+      const id = await createProblem(meta, probR, figR, solR);
       toast(`#${id} 저장됨${auto ? ' · 글자 인식 중' : ''}`);
     } else {
-      const solImage = await cropAndUpload(solR, `${target.source || '문제'} ${target.number || ''} #${target.id} 해설`);
-      store.deleteFile(target.solImage);
-      Object.assign(target, { solImage, solDocId: DOC.id, solRegions: solR, solWFrac: widthFrac(solR), solOcr: auto ? 'wait' : '', updatedAt: t });
+      await attachSolution(target, solR);
       if (meta.answer) target.answer = meta.answer;
-      if (auto) enqueue(target.id, 'solution');
       toast(`#${target.id}에 해설을 붙였습니다`);
       // 다음 문제 자동 선택
       const next = bank.problems.find(p => p.id > target.id && p.source === target.source && !p.solImage);
@@ -727,11 +945,15 @@ async function runOcr({ id, kind }) {
   p[key] = 'run'; renderOcrStatus(); rerenderLight();
   try {
     if (kind === 'problem') {
-      const r = await readProblem(await store.getBlob(p.image), p.figures.length);
+      // 단원이 비어 있으면 그 학년·과목의 단원 목록에서 AI 가 고르게 함
+      const units = !p.unit && p.grade ? unitsOf(p.grade, p.subject) : null;
+      const r = await readProblem(await store.getBlob(p.image), p.figures.length, units);
       // 사람이 먼저 고쳐 넣은 내용은 덮어쓰지 않음
       if (!p.body) p.body = r.body.trim();
       if (!p.choices.length) p.choices = r.choices.map(c => c.trim()).filter(Boolean).slice(0, 5);
       if (!p.format) p.format = r.format;
+      if (!p.qtype && r.qtype) p.qtype = r.qtype.trim();
+      if (!p.unit && r.unit && units?.includes(r.unit)) p.unit = r.unit;
     } else {
       const r = await readSolution(await store.getBlob(p.solImage));
       if (!p.answer) p.answer = r.answer.trim();
