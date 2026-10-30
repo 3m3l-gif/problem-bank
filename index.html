@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>수학 문제 저장소</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="vendor/katex/katex.min.js" defer></script>
+<script src="vendor/katex/auto-render.min.js" defer></script>
+</head>
+<body>
+
+<!-- ============ 처음 설정 (OAuth 클라이언트 ID) ============ -->
+<section id="setup" class="screen hidden">
+  <div class="panel wide">
+    <h1>📐 수학 문제 저장소 · 처음 설정</h1>
+    <p>문제를 <b>내 Google 드라이브</b>에 저장하려면, Google에서 발급하는 <b>클라이언트 ID</b>가 한 번 필요합니다. (무료, 5분)</p>
+    <ol class="steps">
+      <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 새 프로젝트를 만듭니다 (이름 예: 문제저장소).</li>
+      <li><a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener">Google Drive API</a> 페이지에서 <b>사용</b>을 누릅니다.</li>
+      <li><a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google 인증 플랫폼</a> → <b>시작하기</b>: 앱 이름·이메일 입력, 대상은 <b>외부</b>.</li>
+      <li>같은 화면의 <b>대상(Audience)</b> → <b>테스트 사용자</b>에 내 Gmail 주소를 추가합니다.</li>
+      <li><b>클라이언트</b> → <b>클라이언트 만들기</b> → 유형 <b>웹 애플리케이션</b> →
+        <b>승인된 JavaScript 원본</b>에 <code id="originHint"></code> 를 추가하고 만듭니다.</li>
+      <li>만들어진 <b>클라이언트 ID</b> (…apps.googleusercontent.com)를 아래에 붙여넣습니다.</li>
+    </ol>
+    <form id="setupForm" class="row">
+      <input id="clientIdInput" placeholder="123456-abc.apps.googleusercontent.com" required>
+      <button class="primary">저장</button>
+    </form>
+    <p class="muted small">이 ID는 비밀번호가 아니라 앱 이름표 같은 것이라 공개되어도 괜찮습니다. 저장소 주인이 <code>config.js</code>에 넣어두면 이 화면 없이 바로 로그인됩니다.</p>
+  </div>
+</section>
+
+<!-- ============ 로그인 ============ -->
+<section id="login" class="screen hidden">
+  <div class="panel">
+    <h1>📐 수학 문제 저장소</h1>
+    <p>PDF·사진에서 문제를 잘라 단원·유형별로 모아두고,<br>골라서 시험지(정답·해설 포함)를 만듭니다.</p>
+    <button id="loginBtn" class="primary big">Google 계정으로 시작</button>
+    <p class="muted small">문제와 이미지는 내 Google 드라이브의 <b>‘문제 저장소’</b> 폴더에만 저장됩니다.<br>이 앱은 자기가 만든 파일 외에는 드라이브를 볼 수 없습니다.</p>
+    <p id="loginErr" class="err"></p>
+    <button id="resetClient" class="link small">클라이언트 ID 다시 입력</button>
+  </div>
+</section>
+
+<section id="loading" class="screen"><div class="spinner"></div><p id="loadingMsg">불러오는 중…</p></section>
+
+<!-- ============ 앱 ============ -->
+<div id="app" class="hidden">
+<nav class="top">
+  <strong class="logo">📐 문제 저장소</strong>
+  <button class="tab active" data-tab="input">① 문제 입력</button>
+  <button class="tab" data-tab="bank">② 문제 은행 <span id="totalCount" class="badge"></span></button>
+  <button class="tab" data-tab="sheet">③ 시험지 <span id="cartCount" class="badge"></span></button>
+  <span class="spacer"></span>
+  <span id="saveState" class="muted small"></span>
+  <a id="driveLink" class="small" target="_blank" rel="noopener">드라이브 폴더</a>
+  <button id="logoutBtn" class="link small">로그아웃</button>
+</nav>
+<div id="reauth" class="banner hidden">로그인이 만료되었습니다. <button id="reauthBtn" class="primary">다시 로그인</button> 하면 변경 내용이 저장됩니다.</div>
+
+<!-- ===== 입력 ===== -->
+<section id="tab-input" class="tabpane active">
+  <aside class="left">
+    <h3>파일 올리기</h3>
+    <form id="uploadForm">
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" multiple accept=".pdf,application/pdf,image/*">
+        <span id="dropText">PDF·사진을 끌어다 놓거나 클릭<br><small>여러 장 한꺼번에 가능</small></span>
+      </label>
+      <label class="camera"><input type="file" id="cameraInput" accept="image/*" capture="environment">📷 카메라로 찍기</label>
+      <input id="docName" placeholder="문서 이름 (예: 쎈 대수 2단원)">
+      <select id="docKind">
+        <option value="problem">문제지</option>
+        <option value="solution">답지·해설지</option>
+        <option value="both">문제+해설 함께</option>
+      </select>
+      <button class="primary" id="uploadBtn">올리기</button>
+      <div id="uploadProg" class="muted small"></div>
+    </form>
+    <h3>올린 문서</h3>
+    <ul id="docList" class="doclist"></ul>
+  </aside>
+
+  <main class="viewer">
+    <div class="viewer-bar">
+      <span id="docTitle" class="muted ellipsis">왼쪽에서 문서를 선택하세요</span>
+      <span class="spacer"></span>
+      <button id="prevPage" title="이전 페이지 (←)">◀</button>
+      <span id="pageInfo">-</span>
+      <button id="nextPage" title="다음 페이지 (→)">▶</button>
+      <label class="zoom">확대 <input type="range" id="zoom" min="40" max="220" value="100"></label>
+    </div>
+    <div class="page-scroll" id="pageScroll">
+      <div class="page-wrap" id="pageWrap">
+        <canvas id="pageCanvas"></canvas>
+        <div id="overlay"></div>
+        <div id="pageLoading" class="page-loading hidden"><div class="spinner"></div></div>
+      </div>
+    </div>
+    <p class="hint">드래그해서 영역 지정 · 여러 개 그리면 위아래로 이어 붙임 · 단축키 <kbd>Ctrl+Enter</kbd> 저장 <kbd>←→</kbd> 페이지 <kbd>Q</kbd>/<kbd>W</kbd> 문제/해설 <kbd>Z</kbd> 취소</p>
+  </main>
+
+  <aside class="right">
+    <div class="modes">
+      <button class="mode active" data-mode="problem">🟦 문제 영역</button>
+      <button class="mode" data-mode="solution">🟩 해설 영역</button>
+    </div>
+    <div class="row-between">
+      <span id="regionSummary" class="muted small"></span>
+      <button id="clearRegions" class="link small">영역 지우기</button>
+    </div>
+
+    <div id="attachBox" class="attach hidden">
+      <div class="small"><b>해설만 그리면 → 아래에서 고른 문제에 붙습니다</b></div>
+      <input id="attachSearch" placeholder="출처·번호·단원 검색">
+      <div id="attachList" class="attach-list"></div>
+    </div>
+
+    <form id="metaForm" class="meta">
+      <div class="row2">
+        <label>과목<input name="subject" list="dl-subject" autocomplete="off"></label>
+        <label>형식<select name="format"><option value="">-</option><option>객관식</option><option>단답형</option><option>서술형</option></select></label>
+      </div>
+      <label>단원<input name="unit" list="dl-unit" autocomplete="off" placeholder="과목을 고르면 단원 목록이 뜹니다"></label>
+      <label>문제 유형<input name="qtype" list="dl-qtype" autocomplete="off" placeholder="예: 극값 조건, 넓이 구하기"></label>
+      <div class="row2">
+        <label>출처<input name="source" list="dl-source" autocomplete="off" placeholder="2025 6월 모평"></label>
+        <label>번호<input name="number" placeholder="15"></label>
+      </div>
+      <div class="row2">
+        <label>난이도
+          <span class="diff" id="diffPick"></span>
+          <input type="hidden" name="difficulty" value="3">
+        </label>
+        <label>태그<input name="tags" placeholder="킬러, 오답"></label>
+      </div>
+      <label>정답
+        <div class="answer-row">
+          <input name="answer" placeholder="③ 또는 12 또는 $\frac{1}{2}$">
+          <span class="choices"></span>
+        </div>
+      </label>
+      <label>해설 메모 <small class="muted">($수식$ 가능)</small><textarea name="solutionText" rows="2"></textarea></label>
+      <div class="tex-preview" data-for="solutionText"></div>
+      <button class="primary big" id="saveBtn">저장 <small>(Ctrl+Enter)</small></button>
+      <p class="muted small">과목·단원·유형·출처는 다음 문제에도 유지되고, 번호는 +1 됩니다.</p>
+    </form>
+    <div id="recent"></div>
+  </aside>
+</section>
+
+<!-- ===== 문제 은행 ===== -->
+<section id="tab-bank" class="tabpane">
+  <div class="filters" id="filters">
+    <select name="subject" data-ph="과목"></select>
+    <select name="unit" data-ph="단원"></select>
+    <select name="qtype" data-ph="유형"></select>
+    <select name="format" data-ph="형식"></select>
+    <select name="source" data-ph="출처"></select>
+    <select name="tag" data-ph="태그"></select>
+    <label>난이도 <select name="dmin"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>~<select name="dmax"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+    <input name="q" placeholder="검색어" type="search">
+    <label class="chk"><input type="checkbox" name="missing"> 정답·해설 빠진 것만</label>
+    <button id="resetFilters" class="link small">초기화</button>
+  </div>
+  <div class="bank-bar">
+    <span id="resultInfo"></span>
+    <button id="selectAll" class="link">보이는 문제 모두 담기</button>
+    <label class="chk"><input type="checkbox" id="showAns"> 정답·해설 보기</label>
+    <span class="spacer"></span>
+    <label class="chk">무작위 <input type="number" id="randN" value="10" min="1" style="width:64px"> 문제</label>
+    <button id="randBtn" class="primary">🎲 뽑아서 담기</button>
+  </div>
+  <div id="grid" class="grid"></div>
+</section>
+
+<!-- ===== 시험지 ===== -->
+<section id="tab-sheet" class="tabpane">
+  <div class="sheet-layout">
+    <div>
+      <div class="bank-bar">
+        <strong>담은 문제</strong> <span id="cartInfo" class="muted"></span>
+        <span class="spacer"></span>
+        <button id="shuffle">🔀 섞기</button>
+        <button id="sortUnit">단원·난이도순</button>
+        <button id="clearCart" class="danger">비우기</button>
+      </div>
+      <ol id="cartList" class="cart"></ol>
+    </div>
+    <div class="sheet-opts">
+      <h3>출력 설정</h3>
+      <label>제목<input id="sTitle" value="수학 단원 평가"></label>
+      <label>부제 (날짜·반)<input id="sSub"></label>
+      <div class="row2">
+        <label>단 수<select id="sCols"><option value="1">1단</option><option value="2" selected>2단</option></select></label>
+        <label>풀이 공간(mm)<input id="sSpace" type="number" value="30" min="0" max="200"></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="sMeta"> 문제 옆에 단원·출처 표시</label>
+      <label class="chk"><input type="checkbox" id="sSol" checked> 해설 포함</label>
+      <div class="btns">
+        <button class="primary" data-print="all">문제지 + 정답·해설</button>
+        <button data-print="problems">문제지만</button>
+        <button data-print="answers">정답·해설만</button>
+      </div>
+      <p class="muted small">미리보기에서 <b>인쇄 → PDF로 저장</b>하면 PDF 파일이 됩니다.</p>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- 편집 -->
+<dialog id="editDlg">
+  <form method="dialog" id="editForm" class="meta">
+    <h3>문제 #<span id="editId"></span></h3>
+    <div class="edit-imgs">
+      <figure><figcaption>문제</figcaption><img id="editImg" alt=""></figure>
+      <figure><figcaption>해설 <button type="button" id="delSolImg" class="link small danger">해설 이미지 삭제</button></figcaption><img id="editSolImg" alt=""></figure>
+    </div>
+    <div class="row3">
+      <label>과목<input name="subject" list="dl-subject" autocomplete="off"></label>
+      <label>형식<select name="format"><option value="">-</option><option>객관식</option><option>단답형</option><option>서술형</option></select></label>
+      <label>난이도<select name="difficulty"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+    </div>
+    <div class="row2">
+      <label>단원<input name="unit" list="dl-unit-all" autocomplete="off"></label>
+      <label>문제 유형<input name="qtype" list="dl-qtype" autocomplete="off"></label>
+    </div>
+    <div class="row3">
+      <label>출처<input name="source" list="dl-source" autocomplete="off"></label>
+      <label>번호<input name="number"></label>
+      <label>태그<input name="tags"></label>
+    </div>
+    <label>정답<input name="answer"></label>
+    <label>해설 메모 <small class="muted">($수식$ 가능)</small><textarea name="solutionText" rows="3"></textarea></label>
+    <div class="tex-preview" data-for="solutionText"></div>
+    <label>메모<input name="memo"></label>
+    <div class="btns-row">
+      <button type="button" id="delProblem" class="danger">삭제</button>
+      <span class="spacer"></span>
+      <button value="cancel" formnovalidate>닫기</button>
+      <button type="button" id="saveEdit" class="primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 인쇄 미리보기 -->
+<div id="printView" class="hidden">
+  <div class="print-bar">
+    <button id="doPrint" class="primary">🖨 인쇄 / PDF로 저장</button>
+    <button id="closePrint">닫기</button>
+    <span class="muted small">인쇄 창에서 대상을 ‘PDF로 저장’으로 고르면 PDF가 됩니다. 여백은 ‘기본’을 권장합니다.</span>
+  </div>
+  <div id="paper"></div>
+</div>
+
+<datalist id="dl-subject"></datalist><datalist id="dl-unit"></datalist><datalist id="dl-unit-all"></datalist>
+<datalist id="dl-qtype"></datalist><datalist id="dl-source"></datalist>
+<div id="toast"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
