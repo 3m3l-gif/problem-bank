@@ -56,12 +56,16 @@
   <button class="tab active" data-tab="input">① 문제 입력</button>
   <button class="tab" data-tab="bank">② 문제 은행 <span id="totalCount" class="badge"></span></button>
   <button class="tab" data-tab="sheet">③ 시험지 <span id="cartCount" class="badge"></span></button>
+  <button class="tab" data-tab="tax">④ 분류 관리</button>
   <span class="spacer"></span>
+  <span id="ocrState" class="small"></span>
   <span id="saveState" class="muted small"></span>
   <a id="driveLink" class="small" target="_blank" rel="noopener">드라이브 폴더</a>
+  <button id="settingsBtn" class="link small" title="설정">⚙ 설정</button>
   <button id="logoutBtn" class="link small">로그아웃</button>
 </nav>
 <div id="reauth" class="banner hidden">로그인이 만료되었습니다. <button id="reauthBtn" class="primary">다시 로그인</button> 하면 변경 내용이 저장됩니다.</div>
+<div id="keyHint" class="banner hidden">글자 인식(문제를 텍스트·수식으로 저장)을 쓰려면 <button class="link" onclick="document.getElementById('settingsBtn').click()">⚙ 설정</button>에서 Claude API 키를 넣어주세요. 키가 없으면 문제는 이미지로만 저장됩니다.</div>
 
 <!-- ===== 입력 ===== -->
 <section id="tab-input" class="tabpane active">
@@ -102,13 +106,15 @@
         <div id="pageLoading" class="page-loading hidden"><div class="spinner"></div></div>
       </div>
     </div>
-    <p class="hint">드래그해서 영역 지정 · 여러 개 그리면 위아래로 이어 붙임 · 단축키 <kbd>Ctrl+Enter</kbd> 저장 <kbd>←→</kbd> 페이지 <kbd>Q</kbd>/<kbd>W</kbd> 문제/해설 <kbd>Z</kbd> 취소</p>
+    <p class="hint">드래그해서 영역 지정 · 문제 영역을 여러 개 그리면 위아래로 이어 붙임 · 그래프·도형은 <b>그림 영역</b>으로 따로 지정 ·
+      <kbd>Ctrl+Enter</kbd> 저장 <kbd>←→</kbd> 페이지 <kbd>Q</kbd> 문제 <kbd>E</kbd> 그림 <kbd>W</kbd> 해설 <kbd>Z</kbd> 취소</p>
   </main>
 
   <aside class="right">
     <div class="modes">
-      <button class="mode active" data-mode="problem">🟦 문제 영역</button>
-      <button class="mode" data-mode="solution">🟩 해설 영역</button>
+      <button class="mode active" data-mode="problem" title="Q">🟦 문제</button>
+      <button class="mode" data-mode="figure" title="E">🟧 그림</button>
+      <button class="mode" data-mode="solution" title="W">🟩 해설</button>
     </div>
     <div class="row-between">
       <span id="regionSummary" class="muted small"></span>
@@ -122,11 +128,12 @@
     </div>
 
     <form id="metaForm" class="meta">
-      <div class="row2">
-        <label>과목<input name="subject" list="dl-subject" autocomplete="off"></label>
-        <label>형식<select name="format"><option value="">-</option><option>객관식</option><option>단답형</option><option>서술형</option></select></label>
+      <div class="row3">
+        <label>학년<select name="grade"></select></label>
+        <label>과목<select name="subject"></select></label>
+        <label>형식<select name="format"><option value="">자동</option><option>객관식</option><option>단답형</option><option>서술형</option></select></label>
       </div>
-      <label>단원<input name="unit" list="dl-unit" autocomplete="off" placeholder="과목을 고르면 단원 목록이 뜹니다"></label>
+      <label>단원<select name="unit"></select></label>
       <label>문제 유형<input name="qtype" list="dl-qtype" autocomplete="off" placeholder="예: 극값 조건, 넓이 구하기"></label>
       <div class="row2">
         <label>출처<input name="source" list="dl-source" autocomplete="off" placeholder="2025 6월 모평"></label>
@@ -139,16 +146,14 @@
         </label>
         <label>태그<input name="tags" placeholder="킬러, 오답"></label>
       </div>
-      <label>정답
+      <label>정답 <small class="muted">(비우면 해설에서 자동으로)</small>
         <div class="answer-row">
-          <input name="answer" placeholder="③ 또는 12 또는 $\frac{1}{2}$">
-          <span class="choices"></span>
+          <input name="answer" placeholder="③ 또는 12">
+          <span class="choices-pick"></span>
         </div>
       </label>
-      <label>해설 메모 <small class="muted">($수식$ 가능)</small><textarea name="solutionText" rows="2"></textarea></label>
-      <div class="tex-preview" data-for="solutionText"></div>
       <button class="primary big" id="saveBtn">저장 <small>(Ctrl+Enter)</small></button>
-      <p class="muted small">과목·단원·유형·출처는 다음 문제에도 유지되고, 번호는 +1 됩니다.</p>
+      <p class="muted small">저장하면 문제 글자·수식을 자동으로 인식합니다(몇 초). 그동안 다음 문제를 계속 자르면 됩니다.</p>
     </form>
     <div id="recent"></div>
   </aside>
@@ -157,15 +162,17 @@
 <!-- ===== 문제 은행 ===== -->
 <section id="tab-bank" class="tabpane">
   <div class="filters" id="filters">
-    <select name="subject" data-ph="과목"></select>
-    <select name="unit" data-ph="단원"></select>
-    <select name="qtype" data-ph="유형"></select>
-    <select name="format" data-ph="형식"></select>
-    <select name="source" data-ph="출처"></select>
-    <select name="tag" data-ph="태그"></select>
+    <select name="grade"></select>
+    <select name="subject"></select>
+    <select name="unit"></select>
+    <select name="qtype"></select>
+    <select name="format"></select>
+    <select name="source"></select>
+    <select name="tag"></select>
     <label>난이도 <select name="dmin"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>~<select name="dmax"><option value="">-</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
-    <input name="q" placeholder="검색어" type="search">
-    <label class="chk"><input type="checkbox" name="missing"> 정답·해설 빠진 것만</label>
+    <input name="q" placeholder="검색어 (본문 포함)" type="search">
+    <label class="chk"><input type="checkbox" name="review"> 검수 필요 <span id="reviewCount" class="badge"></span></label>
+    <label class="chk"><input type="checkbox" name="missing"> 정답·해설 빠진 것</label>
     <button id="resetFilters" class="link small">초기화</button>
   </div>
   <div class="bank-bar">
@@ -184,10 +191,10 @@
   <div class="sheet-layout">
     <div>
       <div class="bank-bar">
-        <strong>담은 문제</strong> <span id="cartInfo" class="muted"></span>
+        <strong>담은 문제</strong> <span id="cartInfo" class="muted small"></span>
         <span class="spacer"></span>
         <button id="shuffle">🔀 섞기</button>
-        <button id="sortUnit">단원·난이도순</button>
+        <button id="sortUnit">학년·단원·난이도순</button>
         <button id="clearCart" class="danger">비우기</button>
       </div>
       <ol id="cartList" class="cart"></ol>
@@ -196,6 +203,12 @@
       <h3>출력 설정</h3>
       <label>제목<input id="sTitle" value="수학 단원 평가"></label>
       <label>부제 (날짜·반)<input id="sSub"></label>
+      <label>내용
+        <select id="sMode">
+          <option value="all">문제지 + 정답·해설</option>
+          <option value="problems">문제지만</option>
+          <option value="answers">정답·해설만</option>
+        </select></label>
       <div class="row2">
         <label>단 수<select id="sCols"><option value="1">1단</option><option value="2" selected>2단</option></select></label>
         <label>풀이 공간(mm)<input id="sSpace" type="number" value="30" min="0" max="200"></label>
@@ -203,48 +216,101 @@
       <label class="chk"><input type="checkbox" id="sMeta"> 문제 옆에 단원·출처 표시</label>
       <label class="chk"><input type="checkbox" id="sSol" checked> 해설 포함</label>
       <div class="btns">
-        <button class="primary" data-print="all">문제지 + 정답·해설</button>
-        <button data-print="problems">문제지만</button>
-        <button data-print="answers">정답·해설만</button>
+        <button class="primary" id="makeHwp">📄 한글 파일(.hwpx)</button>
+        <button class="primary" id="makePdf">🖨 PDF 저장 / 인쇄</button>
       </div>
-      <p class="muted small">미리보기에서 <b>인쇄 → PDF로 저장</b>하면 PDF 파일이 됩니다.</p>
+      <p class="muted small">한글 파일은 수식이 <b>한글 수식</b>으로 들어가 바로 고칠 수 있습니다 (한글 2014 이상). PDF는 미리보기에서 인쇄 → ‘PDF로 저장’.</p>
     </div>
+  </div>
+</section>
+
+<!-- ===== 분류 관리 ===== -->
+<section id="tab-tax" class="tabpane">
+  <p class="muted small">학년을 고르면 여기 적힌 단원이 목록에 뜹니다. 순서를 바꾸면 문제 은행·시험지 정렬에도 반영됩니다. 단원 이름을 바꾸면 그 단원의 문제들도 함께 바뀝니다.</p>
+  <h3>중학교 <small class="muted">(학년별 단원)</small></h3>
+  <div id="taxMiddle" class="tax-grid"></div>
+  <h3>고등학교 <small class="muted">(과목별 단원 · 고1~고3 공통)</small></h3>
+  <div id="taxHigh" class="tax-grid"></div>
+  <div class="row tax-foot">
+    <form id="addSubject" class="row"><input placeholder="새 과목 이름" required><button>과목 추가</button></form>
+    <span class="spacer"></span>
+    <button id="resetTax" class="link small danger">기본값으로 되돌리기</button>
   </div>
 </section>
 </div>
 
-<!-- 편집 -->
+<!-- 편집·검수 -->
 <dialog id="editDlg">
   <form method="dialog" id="editForm" class="meta">
-    <h3>문제 #<span id="editId"></span></h3>
-    <div class="edit-imgs">
-      <figure><figcaption>문제</figcaption><img id="editImg" alt=""></figure>
-      <figure><figcaption>해설 <button type="button" id="delSolImg" class="link small danger">해설 이미지 삭제</button></figcaption><img id="editSolImg" alt=""></figure>
+    <h3>문제 #<span id="editId"></span> 수정·검수</h3>
+    <div class="edit-layout">
+      <div class="edit-left">
+        <figure><figcaption>원본 문제</figcaption><img id="editImg" alt=""></figure>
+        <div id="editFigs" class="edit-figs"></div>
+        <figure><figcaption>원본 해설 <button type="button" id="delSolImg" class="link small danger">해설 이미지 삭제</button></figcaption><img id="editSolImg" alt=""></figure>
+        <h4>미리보기</h4>
+        <div id="editPreview" class="preview"></div>
+      </div>
+      <div class="edit-right">
+        <div class="row3">
+          <label>학년<select name="grade"></select></label>
+          <label>과목<select name="subject"></select></label>
+          <label>난이도<select name="difficulty"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+        </div>
+        <div class="row2">
+          <label>단원<select name="unit"></select></label>
+          <label>문제 유형<input name="qtype" list="dl-qtype" autocomplete="off"></label>
+        </div>
+        <div class="row3">
+          <label>형식<select name="format"><option value="">-</option><option>객관식</option><option>단답형</option><option>서술형</option></select></label>
+          <label>출처<input name="source" list="dl-source" autocomplete="off"></label>
+          <label>번호<input name="number"></label>
+        </div>
+        <label>태그<input name="tags"></label>
+        <label>문제 본문 <span id="ocrBodyState" class="ocr"></span> <button type="button" id="reOcrBody" class="link small">🔍 다시 인식</button>
+          <textarea name="body" rows="6" placeholder="수식은 $x^2$ 처럼, 그림 자리는 [그림1]"></textarea></label>
+        <div class="tex-tools">
+          <button type="button" data-target="body" data-insert="$$">$수식$</button>
+          <button type="button" data-target="body" data-insert="\frac{}{}">분수</button>
+          <button type="button" data-target="body" data-insert="\sqrt{}">√</button>
+          <button type="button" data-target="body" data-insert="[그림1]">[그림]</button>
+        </div>
+        <div class="choice-edit">
+          <label>① <input name="c1"></label><label>② <input name="c2"></label><label>③ <input name="c3"></label><label>④ <input name="c4"></label><label>⑤ <input name="c5"></label>
+        </div>
+        <label>정답<input name="answer"></label>
+        <label>해설 <span id="ocrSolState" class="ocr"></span> <button type="button" id="reOcrSol" class="link small">🔍 다시 인식</button>
+          <textarea name="solution" rows="5"></textarea></label>
+        <div class="row2">
+          <label>해설 출력<select name="solMode"><option value="text">글자(인식한 해설)</option><option value="image">원본 이미지</option></select></label>
+          <label>메모<input name="memo"></label>
+        </div>
+        <label class="chk"><input type="checkbox" name="reviewed"> 검수 완료 (원본과 맞는지 확인함)</label>
+      </div>
     </div>
-    <div class="row3">
-      <label>과목<input name="subject" list="dl-subject" autocomplete="off"></label>
-      <label>형식<select name="format"><option value="">-</option><option>객관식</option><option>단답형</option><option>서술형</option></select></label>
-      <label>난이도<select name="difficulty"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
-    </div>
-    <div class="row2">
-      <label>단원<input name="unit" list="dl-unit-all" autocomplete="off"></label>
-      <label>문제 유형<input name="qtype" list="dl-qtype" autocomplete="off"></label>
-    </div>
-    <div class="row3">
-      <label>출처<input name="source" list="dl-source" autocomplete="off"></label>
-      <label>번호<input name="number"></label>
-      <label>태그<input name="tags"></label>
-    </div>
-    <label>정답<input name="answer"></label>
-    <label>해설 메모 <small class="muted">($수식$ 가능)</small><textarea name="solutionText" rows="3"></textarea></label>
-    <div class="tex-preview" data-for="solutionText"></div>
-    <label>메모<input name="memo"></label>
     <div class="btns-row">
       <button type="button" id="delProblem" class="danger">삭제</button>
       <span class="spacer"></span>
       <button value="cancel" formnovalidate>닫기</button>
-      <button type="button" id="saveEdit" class="primary">저장</button>
+      <button type="button" id="saveEdit">저장</button>
+      <button type="button" id="saveReviewed" class="primary">✓ 검수 완료하고 저장</button>
     </div>
+  </form>
+</dialog>
+
+<!-- 설정 -->
+<dialog id="settingsDlg">
+  <form method="dialog" class="meta">
+    <h3>⚙ 설정</h3>
+    <label>Claude API 키 <small class="muted">(문제 글자·수식 인식에 사용)</small>
+      <input id="apiKeyInput" type="password" placeholder="sk-ant-..." autocomplete="off"></label>
+    <p class="muted small">
+      <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic 콘솔</a>에서 키를 만들어 붙여넣으세요 (결제 수단 등록 필요).
+      문제 1개 인식에 대략 수십 원 정도 듭니다.<br>
+      키는 <b>이 브라우저에만</b> 저장되고 드라이브에는 올라가지 않습니다. 다른 기기에서는 다시 넣어야 합니다.
+    </p>
+    <div class="btns-row"><span id="keyState" class="small"></span><span class="spacer"></span>
+      <button value="close">닫기</button><button type="button" id="saveKey" class="primary">저장하고 확인</button></div>
   </form>
 </dialog>
 
@@ -258,7 +324,6 @@
   <div id="paper"></div>
 </div>
 
-<datalist id="dl-subject"></datalist><datalist id="dl-unit"></datalist><datalist id="dl-unit-all"></datalist>
 <datalist id="dl-qtype"></datalist><datalist id="dl-source"></datalist>
 <div id="toast"></div>
 <script>
