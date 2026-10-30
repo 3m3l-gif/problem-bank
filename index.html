@@ -261,6 +261,18 @@
 <datalist id="dl-subject"></datalist><datalist id="dl-unit"></datalist><datalist id="dl-unit-all"></datalist>
 <datalist id="dl-qtype"></datalist><datalist id="dl-source"></datalist>
 <div id="toast"></div>
+<script>
+// 앱 스크립트가 못 뜨면 빈 화면 대신 원인을 보여줌
+window.__pbErrors = [];
+addEventListener('error', e => __pbErrors.push((e.message || '') + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '') || '파일을 불러오지 못함: ' + (e.target?.src || e.target?.href)), true);
+addEventListener('unhandledrejection', e => __pbErrors.push(String(e.reason?.message || e.reason)));
+setTimeout(() => {
+  if (window.__pbStarted) return;
+  const m = document.getElementById('loadingMsg');
+  m.innerHTML = '앱을 시작하지 못했습니다. 새로고침(Ctrl+Shift+R)해 보시고, 계속되면 아래 내용을 알려주세요.<br><small style="color:#c00">' +
+    (__pbErrors.join('<br>') || 'js/app.js 를 불러오지 못함 (파일 위치 확인)').replace(/</g, '&lt;').replace(/&lt;br>/g, '<br>') + '</small>';
+}, 8000);
+</script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@ import { DriveStore, LocalStore, AuthError, ConflictError } from './store.js';
 import { CURRICULUM, FORMATS, CHOICES } from './math.js';
 import { GOOGLE_CLIENT_ID } from '../config.js';
 
+window.__pbStarted = true;
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
 // 글꼴이 내장되지 않은 PDF(한글 CID 글꼴 등)용 데이터 — 필요할 때만 CDN에서 받음
 const PDFJS_CDN = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/';
